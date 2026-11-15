@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import string
 from dataclasses import dataclass
 
@@ -53,6 +54,11 @@ _BLOCKED = {
     frozenset({"ctrl", "alt", "del"}),
     frozenset({"ctrl", "w"}),
     frozenset({"ctrl", "shift", "esc"}),
+    frozenset({"ctrl", "esc"}),
+    frozenset({"alt", "esc"}),
+    frozenset({"alt", "space"}),
+    frozenset({"ctrl", "f4"}),
+    frozenset({"ctrl", "q"}),
 }
 
 
@@ -73,7 +79,8 @@ def is_blocked(combo: str) -> bool:
     parts = [p.strip() for p in combo.lower().split("+")]
     if any(p in ("win", "windows", "cmd", "super", "meta") for p in parts):
         return True
-    return frozenset(parts) in _BLOCKED
+    pressed = frozenset(parts)
+    return any(b <= pressed for b in _BLOCKED)
 
 
 def parse_tool_call(message: dict, img_w: int, img_h: int) -> Action:
@@ -99,10 +106,16 @@ def parse_tool_call(message: dict, img_w: int, img_h: int) -> Action:
     def num(key: str) -> float:
         if key not in args:
             fail(f"Missing argument '{key}'.")
+        v = args[key]
+        if isinstance(v, bool):
+            fail(f"Argument '{key}' must be a number.")
         try:
-            return float(args[key])
+            f = float(v)
         except (TypeError, ValueError):
             fail(f"Argument '{key}' must be a number.")
+        if not math.isfinite(f):
+            fail(f"Argument '{key}' must be a finite number.")
+        return f
 
     def point(kx: str, ky: str) -> tuple[int, int]:
         x, y = round(num(kx)), round(num(ky))

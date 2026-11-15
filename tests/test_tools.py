@@ -74,6 +74,27 @@ def test_blocked_keys(combo):
         parse_tool_call(msg("key", {"combo": combo}), W, H)
 
 
+@pytest.mark.parametrize(
+    "combo",
+    ["ctrl+alt+tab", "shift+alt+tab", "ctrl+shift+alt+delete", "shift+alt+f4",
+     "ctrl+esc", "alt+esc", "alt+space", "ctrl+f4", "ctrl+q", "ctrl+shift+w"],
+)
+def test_blocked_supersets_and_extras(combo):
+    with pytest.raises(ToolError):
+        parse_tool_call(msg("key", {"combo": combo}), W, H)
+
+
+@pytest.mark.parametrize("bad", ["inf", "-inf", "nan", True, None, [1]])
+def test_non_finite_or_bool_coords_rejected(bad):
+    with pytest.raises(ToolError):
+        parse_tool_call(msg("click", {"x": bad, "y": 5}), W, H)
+
+
+def test_non_finite_wait_rejected():
+    with pytest.raises(ToolError):
+        parse_tool_call(msg("wait", {"seconds": "nan"}), W, H)
+
+
 def test_unknown_key():
     with pytest.raises(ToolError):
         parse_tool_call(msg("key", {"combo": "ctrl+banana"}), W, H)
