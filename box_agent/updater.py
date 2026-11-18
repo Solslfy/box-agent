@@ -1,6 +1,7 @@
 """Self-update from GitHub Releases."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -21,7 +22,11 @@ REPO = "Solslfy/box-agent"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 ASSET_NAME = "BoxAgent.exe"
+SHA_NAME = ASSET_NAME + ".sha256"
+# Hosts a GitHub release download may legitimately redirect to.
+ALLOWED_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+_SHA_RE = re.compile(r"^([0-9a-fA-F]{64})\b")
 
 
 @dataclass
@@ -29,6 +34,22 @@ class Release:
     version: str
     exe_url: str
     page_url: str
+    sha_url: str = ""
+
+
+def parse_sha_file(text: str) -> str:
+    m = _SHA_RE.match(text.strip())
+    if not m:
+        raise ValueError("Checksum file is not a SHA-256 hash")
+    return m[1].lower()
+
+
+def verify_sha256(path: Path, expected: str) -> bool:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest() == expected.lower()
 
 
 def parse_version(tag: str) -> tuple[int, int, int]:
@@ -55,11 +76,16 @@ def check_latest(local: str = __version__, http: httpx.Client | None = None) -> 
         tag = data.get("tag_name", "")
         if not is_newer(tag, local):
             return None
-        for asset in data.get("assets") or []:
-            url = asset.get("browser_download_url", "")
-            if asset.get("name") == ASSET_NAME and url.startswith(DOWNLOAD_PREFIX):
-                return Release(".".join(map(str, parse_version(tag))), url, data.get("html_url", ""))
-        return None
+        urls = {
+            a.get("name"): a.get("browser_download_url", "")
+            for a in data.get("assets") or []
+            if str(a.get("browser_download_url", "")).startswith(DOWNLOAD_PREFIX)
+        }
+        if ASSET_NAME not in urls or SHA_NAME not in urls:
+            return None
+        version = ".".join(map(str, parse_version(tag)))
+        page = f"https://github.com/{REPO}/releases/tag/v{version}"
+        return Release(version, urls[ASSET_NAME], page, urls[SHA_NAME])
     except Exception as e:  # never let update checks break the app
         log.warning("Update check failed: %s", e)
         return None
@@ -72,7 +98,10 @@ def download(url: str, dest: Path, http: httpx.Client | None = None) -> Path:
     tmp = dest.with_suffix(".part")
     with http.stream("GET", url) as r:
         r.raise_for_status()
-        with open(tmp, "wb") as f:
+        hops = [resp.url for resp in r.history] + [r.url]
+        if any(u.scheme != "https" or u.host not in ALLOWED_HOSTS for u in hops):
+            raise ValueError(f"Download was redirected to an untrusted host: {r.url.host}")
+        with open(tmp, "xb") as f:
             for chunk in r.iter_bytes():
                 f.write(chunk)
     os.replace(tmp, dest)
@@ -101,9 +130,13 @@ def apply_update(release: Release) -> bool:
     if not getattr(sys, "frozen", False):
         webbrowser.open(release.page_url)
         return False
-    tmp = Path(tempfile.gettempdir())
-    new_exe = download(release.exe_url, tmp / "BoxAgent-new.exe")
-    script = write_swap_script(os.getpid(), new_exe, Path(sys.executable), tmp / "BoxAgent-update.cmd")
+    stage = Path(tempfile.mkdtemp(prefix="BoxAgent-update-"))  # fresh, user-private
+    sha = parse_sha_file(download(release.sha_url, stage / SHA_NAME).read_text(encoding="utf-8"))
+    new_exe = download(release.exe_url, stage / "BoxAgent-new.exe")
+    if not verify_sha256(new_exe, sha):
+        new_exe.unlink(missing_ok=True)
+        raise ValueError("Downloaded update failed its SHA-256 check")
+    script = write_swap_script(os.getpid(), new_exe, Path(sys.executable), stage / "swap.cmd")
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
     subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True)
     return True

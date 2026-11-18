@@ -1,3 +1,5 @@
+import hashlib
+
 import httpx
 import pytest
 
@@ -5,13 +7,19 @@ from box_agent.updater import (
     RELEASES_URL,
     Release,
     check_latest,
+    download,
     is_newer,
+    parse_sha_file,
     parse_version,
+    verify_sha256,
     write_swap_script,
 )
 
 DL = "https://github.com/Solslfy/box-agent/releases/download/v0.2.0/BoxAgent.exe"
+SHA = DL + ".sha256"
+PAGE = "https://github.com/Solslfy/box-agent/releases/tag/v0.2.0"
 ASSET = {"name": "BoxAgent.exe", "browser_download_url": DL}
+SHA_ASSET = {"name": "BoxAgent.exe.sha256", "browser_download_url": SHA}
 
 
 def client(status=200, body=None):
@@ -41,20 +49,62 @@ def test_is_newer():
 
 
 def test_check_latest_newer():
-    body = {"tag_name": "v0.2.0", "html_url": "https://page", "assets": [ASSET]}
-    assert check_latest("0.1.0", http=client(body=body)) == Release(
-        "0.2.0", DL, "https://page"
-    )
+    body = {"tag_name": "v0.2.0", "html_url": "https://evil.example/", "assets": [ASSET, SHA_ASSET]}
+    # page_url is built locally, never taken from the API response
+    assert check_latest("0.1.0", http=client(body=body)) == Release("0.2.0", DL, PAGE, SHA)
 
 
 def test_check_latest_rejects_foreign_download_url():
     asset = {"name": "BoxAgent.exe", "browser_download_url": "https://evil.example/BoxAgent.exe"}
-    body = {"tag_name": "v0.2.0", "html_url": "p", "assets": [asset]}
+    body = {"tag_name": "v0.2.0", "html_url": "p", "assets": [asset, SHA_ASSET]}
     assert check_latest("0.1.0", http=client(body=body)) is None
 
 
+def test_check_latest_requires_checksum_asset():
+    body = {"tag_name": "v0.2.0", "html_url": "p", "assets": [ASSET]}
+    assert check_latest("0.1.0", http=client(body=body)) is None
+
+
+def test_parse_sha_file():
+    h = "a" * 64
+    assert parse_sha_file(f"{h}  BoxAgent.exe\n") == h
+    assert parse_sha_file(h.upper()) == h
+    with pytest.raises(ValueError):
+        parse_sha_file("not-a-hash")
+
+
+def test_verify_sha256(tmp_path):
+    f = tmp_path / "x.exe"
+    f.write_bytes(b"hello")
+    good = hashlib.sha256(b"hello").hexdigest()
+    assert verify_sha256(f, good)
+    assert not verify_sha256(f, "0" * 64)
+
+
+def test_download_rejects_redirect_to_foreign_host(tmp_path):
+    def handler(request):
+        if request.url.host == "github.com":
+            return httpx.Response(302, headers={"Location": "https://evil.example/x.exe"})
+        return httpx.Response(200, content=b"bad")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    with pytest.raises(ValueError):
+        download(DL, tmp_path / "new.exe", http=http)
+    assert not (tmp_path / "new.exe").exists()
+
+
+def test_download_follows_github_asset_redirect(tmp_path):
+    def handler(request):
+        if request.url.host == "github.com":
+            return httpx.Response(302, headers={"Location": "https://release-assets.githubusercontent.com/a"})
+        return httpx.Response(200, content=b"good")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    assert download(DL, tmp_path / "new.exe", http=http).read_bytes() == b"good"
+
+
 def test_check_latest_same_version_none():
-    body = {"tag_name": "v0.1.0", "html_url": "p", "assets": [ASSET]}
+    body = {"tag_name": "v0.1.0", "html_url": "p", "assets": [ASSET, SHA_ASSET]}
     assert check_latest("0.1.0", http=client(body=body)) is None
 
 
