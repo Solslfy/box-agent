@@ -47,6 +47,9 @@ ALLOWED_KEYS: frozenset[str] = frozenset(
     + "enter tab esc backspace delete space up down left right home end pageup pagedown insert ctrl shift alt".split()
 )
 
+MODIFIERS = frozenset({"ctrl", "shift", "alt"})
+MAX_TYPE_CHARS = 2000
+
 _BLOCKED = {
     frozenset({"alt", "tab"}),
     frozenset({"alt", "f4"}),
@@ -143,7 +146,10 @@ def parse_tool_call(message: dict, img_w: int, img_h: int) -> Action:
         x2, y2 = point("x2", "y2")
         return Action(name, {"x1": x1, "y1": y1, "x2": x2, "y2": y2}, call_id)
     if name == "type":
-        return Action(name, {"text": text("text")}, call_id)
+        t = text("text")
+        if len(t) > MAX_TYPE_CHARS:
+            fail(f"text is too long (max {MAX_TYPE_CHARS} characters). Type it in parts.")
+        return Action(name, {"text": t}, call_id)
     if name == "key":
         combo = text("combo").lower().replace(" ", "")
         parts = combo.split("+")
@@ -152,6 +158,8 @@ def parse_tool_call(message: dict, img_w: int, img_h: int) -> Action:
         bad = [p for p in parts if p not in ALLOWED_KEYS]
         if bad:
             fail(f"Unknown key(s): {', '.join(bad)}.")
+        if any(p not in MODIFIERS for p in parts[:-1]):
+            fail("Only ctrl, shift and alt may come before the last key, e.g. 'ctrl+shift+t'.")
         return Action(name, {"combo": combo}, call_id)
     if name == "scroll":
         x, y = point("x", "y")

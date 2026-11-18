@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import QObject, Slot
 from PySide6.QtWidgets import QApplication
 
 from box_agent.agent import RunResult, StepEvent
@@ -41,6 +42,37 @@ def test_panel_dock_never_overlaps_box(qapp):
     assert r[0] + r[2] <= 1500
     r = dock_rect(Box(100, 100, 400, 300), screen, 360, 500)
     assert r[0] >= 500
+
+
+def test_run_handle_finishes_on_gui_thread(qapp):
+    import threading
+    import time
+
+    from box_agent.app import RunHandle
+
+    class FakeAgent:
+        def run(self, task):
+            return RunResult("done", task)
+
+    seen = {}
+
+    class Receiver(QObject):
+        @Slot(object)
+        def got(self, r):
+            seen["thread"] = threading.current_thread()
+            seen["result"] = r
+
+    rec = Receiver()
+    h = RunHandle(FakeAgent(), "hi")
+    h.ended.connect(rec.got)
+    h.start()
+    deadline = time.time() + 5
+    while "result" not in seen and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert seen["result"] == RunResult("done", "hi")
+    assert seen["thread"] is threading.main_thread()
+    assert h.handled_on_main
 
 
 def test_overlay_ignores_tiny_box(qapp):

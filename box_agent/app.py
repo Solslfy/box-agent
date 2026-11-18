@@ -86,6 +86,55 @@ class AgentWorker(QObject):
         self.finished.emit(result)
 
 
+class RunHandle(QObject):
+    """Owns one agent run's worker + thread.
+
+    Results reach `ended` on the GUI thread: the worker's signals are connected to
+    bound slots of this object (which lives on the GUI thread), so Qt queues them.
+    Lambdas would run on the worker thread and touch widgets from it.
+    """
+
+    step = Signal(object)
+    point = Signal(int, int)
+    ended = Signal(object)
+    auth_failed = Signal()
+
+    def __init__(self, agent: Agent, task: str):
+        super().__init__()
+        self.handled_on_main = False
+        self.thread = QThread()
+        self.worker = AgentWorker(agent, task)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.step.connect(self._on_step)
+        self.worker.point.connect(self._on_point)
+        self.worker.auth_failed.connect(self._on_auth_failed)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.finished.connect(self.thread.quit)
+        self.thread.finished.connect(self.worker.deleteLater)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    @Slot(object)
+    def _on_step(self, ev):
+        self.step.emit(ev)
+
+    @Slot(int, int)
+    def _on_point(self, x, y):
+        self.point.emit(x, y)
+
+    @Slot()
+    def _on_auth_failed(self):
+        self.auth_failed.emit()
+
+    @Slot(object)
+    def _on_finished(self, result):
+        self.handled_on_main = threading.current_thread() is threading.main_thread()
+        self.thread.wait(2000)
+        self.ended.emit(result)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, s: settings_mod.Settings, message: str = ""):
         super().__init__()
@@ -146,6 +195,8 @@ class Controller(QObject):
         self.stop_event = threading.Event()
         self.running = False
         self.pending_release: updater.Release | None = None
+        self.run_handle: RunHandle | None = None
+        self.outline: Outline | None = None
         self._keep: list = []  # strong refs to transient windows/threads
 
         self.select_requested.connect(self.start_selection)
@@ -221,15 +272,15 @@ class Controller(QObject):
         scale = fit_scale(box.width, box.height)
         outline = Outline(logical, logical.width() / max(1, round(box.width * scale)))
         outline.show()
-        worker_holder = {}
-        executor = Executor(
-            box, scale, dry_run=s.dry_run,
-            on_point=lambda x, y: worker_holder["w"].point.emit(x, y),
-        )
+        holder = {}
         self.stop_event.clear()
+        executor = Executor(
+            box, scale, dry_run=s.dry_run, stop=self.stop_event,
+            on_point=lambda x, y: holder["h"].worker.point.emit(x, y),
+        )
 
         def on_step(ev: StepEvent):
-            worker_holder["w"].step.emit(ev)
+            holder["h"].worker.step.emit(ev)
 
         agent = Agent(
             OpenRouterClient(key, s.model),
@@ -240,16 +291,13 @@ class Controller(QObject):
             max_steps=s.max_steps,
             settle_delay=s.settle_delay,
         )
-        worker = AgentWorker(agent, task)
-        worker_holder["w"] = worker
-        thread = QThread()
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.step.connect(self.panel.add_step)
-        worker.point.connect(outline.mark)
-        worker.auth_failed.connect(lambda: self.open_settings("OpenRouter rejected your API key."))
-        worker.finished.connect(lambda r: self._on_finished(r, thread, worker, outline))
-        self._keep += [worker, thread]
+        handle = RunHandle(agent, task)
+        holder["h"] = handle
+        handle.step.connect(self.panel.add_step)
+        handle.point.connect(outline.mark)
+        handle.auth_failed.connect(self._on_auth_failed)
+        handle.ended.connect(self._on_finished)
+        self.run_handle, self.outline = handle, outline
 
         self.panel.dock_beside(
             Box(logical.x(), logical.y(), logical.width(), logical.height()),
@@ -258,16 +306,19 @@ class Controller(QObject):
         self.panel.start_run(task)
         self.panel.show()
         self.running = True
-        thread.start()
+        handle.start()
 
-    def _on_finished(self, result: RunResult, thread: QThread, worker, outline: Outline):
+    @Slot()
+    def _on_auth_failed(self):
+        self.open_settings("OpenRouter rejected your API key.")
+
+    @Slot(object)
+    def _on_finished(self, result: RunResult):
         self.running = False
-        thread.quit()
-        thread.wait(2000)
-        outline.close()
-        for obj in (worker, thread):
-            if obj in self._keep:
-                self._keep.remove(obj)
+        if self.outline is not None:
+            self.outline.close()
+            self.outline = None
+        self.run_handle = None
         self.panel.show_result(result)
         self.panel.show()
         if self.pending_release:

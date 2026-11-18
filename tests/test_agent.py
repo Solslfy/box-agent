@@ -164,6 +164,32 @@ def test_auth_error_propagates():
         agent.run("t")
 
 
+def test_type_before_click_refused():
+    agent, llm, ex, _, events = make([call("type", {"text": "hi"}), call("click", {"x": 1, "y": 1}),
+                                      call("type", {"text": "hi"}), call("done", {"answer": "ok"})])
+    assert agent.run("t").status == "done"
+    assert [a.name for a in ex.ran] == ["click", "type"]
+    assert "Click inside the box first" in llm.calls[1][-1]["content"]
+
+
+def test_key_before_click_refused():
+    agent, _, ex, _, _ = make([call("key", {"combo": "enter"}), call("done", {"answer": "ok"})])
+    agent.run("t")
+    assert ex.ran == []
+
+
+def test_missing_tool_call_id_is_synthesized():
+    reply = call("click", {"x": 1, "y": 1})
+    del reply["tool_calls"][0]["id"]
+    agent, llm, ex, _, _ = make([reply, call("done", {"answer": "ok"})])
+    assert agent.run("t").status == "done"
+    msgs = llm.calls[1]
+    assistant = [m for m in msgs if m["role"] == "assistant"][0]
+    tool = [m for m in msgs if m["role"] == "tool"][0]
+    assert assistant["tool_calls"][0]["id"] == tool["tool_call_id"]
+    assert tool["tool_call_id"]
+
+
 def test_prune_images_keeps_latest_3():
     msgs = [{"role": "user", "content": [{"type": "text", "text": str(i)},
                                          {"type": "image_url", "image_url": {"url": f"u{i}"}}]}

@@ -120,9 +120,13 @@ def test_check_latest_http_error_none():
 def test_swap_script_contents(tmp_path):
     new = tmp_path / "new.exe"
     target = tmp_path / "Box Agent" / "BoxAgent.exe"
-    script = write_swap_script(4321, new, target, tmp_path / "swap.cmd")
+    script = write_swap_script([4321, 99], new, target, tmp_path / "swap.cmd")
     text = script.read_text()
-    assert "PID eq 4321" in text
+    assert "PID eq 4321" in text and "PID eq 99" in text
     assert str(new) in text and str(target) in text
     assert "move /Y" in text
-    assert 'start ""' in text
+    # start the new exe only after a successful move; retry the move on failure
+    assert text.index("if not errorlevel 1 goto moved") < text.index(":moved") < text.rindex('start ""')
+    assert b"\r\r" not in script.read_bytes()  # cmd needs plain CRLF line endings
+    assert "goto retry" in text
+    assert "update failed" in text.lower()

@@ -1,6 +1,7 @@
 """Execute validated actions with real mouse/keyboard input (pynput)."""
 from __future__ import annotations
 
+import threading
 import time
 from typing import Callable
 
@@ -11,6 +12,7 @@ from .geometry import Box, to_screen
 from .tools import Action
 
 FAILSAFE_MARGIN = 2
+TYPE_CHUNK = 20
 
 _BUTTONS = {"left": Button.left, "right": Button.right, "middle": Button.middle}
 _SPECIAL = {
@@ -28,13 +30,20 @@ class FailsafeTriggered(Exception):
     """The mouse is parked in a screen corner: the user wants the agent to stop."""
 
 
+def monitor_corners(monitors: list[dict]) -> list[tuple[int, int]]:
+    """The 4 corners of every real monitor (mss list; index 0 is the virtual bbox and is skipped)."""
+    out = []
+    for m in monitors[1:]:
+        l, t, w, h = m["left"], m["top"], m["width"], m["height"]
+        out += [(l, t), (l + w - 1, t), (l, t + h - 1), (l + w - 1, t + h - 1)]
+    return out
+
+
 def _default_corners() -> list[tuple[int, int]]:
     import mss
 
     with mss.mss() as s:
-        m = s.monitors[0]  # whole virtual desktop
-    l, t, w, h = m["left"], m["top"], m["width"], m["height"]
-    return [(l, t), (l + w - 1, t), (l, t + h - 1), (l + w - 1, t + h - 1)]
+        return monitor_corners(s.monitors)
 
 
 class Executor:
@@ -48,6 +57,7 @@ class Executor:
         corners: list[tuple[int, int]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         on_point: Callable[[int, int], None] | None = None,
+        stop: threading.Event | None = None,
     ):
         if mouse is None:
             from pynput.mouse import Controller as MouseController
@@ -65,8 +75,11 @@ class Executor:
         self.corners = corners if corners is not None else _default_corners()
         self.sleep = sleep
         self.on_point = on_point  # dry run: told the image points it would have used
+        self.stop = stop
 
     def _check_failsafe(self) -> None:
+        if self.stop is not None and self.stop.is_set():
+            raise FailsafeTriggered("Stop requested")
         mx, my = self.mouse.position
         for cx, cy in self.corners:
             if abs(mx - cx) <= FAILSAFE_MARGIN and abs(my - cy) <= FAILSAFE_MARGIN:
@@ -136,11 +149,18 @@ class Executor:
             self.mouse.release(Button.left)
 
     def _type(self, text: str) -> None:
+        """Type in small chunks, checking stop/failsafe between them so long text can be interrupted."""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        first = True
         for i, part in enumerate(text.split("\n")):
             if i:
+                self._check_failsafe()
                 self.keyboard.tap(Key.enter)
-            if part:
-                self.keyboard.type(part)
+            for j in range(0, len(part), TYPE_CHUNK):
+                if not first:
+                    self._check_failsafe()
+                first = False
+                self.keyboard.type(part[j : j + TYPE_CHUNK])
 
     def _key(self, combo: str) -> None:
         parts = combo.split("+")

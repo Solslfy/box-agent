@@ -108,20 +108,45 @@ def download(url: str, dest: Path, http: httpx.Client | None = None) -> Path:
     return dest
 
 
-def write_swap_script(pid: int, new_exe: Path, target_exe: Path, script_path: Path) -> Path:
-    script = (
-        "@echo off\r\n"
-        ":wait\r\n"
-        f'tasklist /FI "PID eq {pid}" | find "{pid}" >nul\r\n'
-        "if not errorlevel 1 (\r\n"
-        "  timeout /t 1 /nobreak >nul\r\n"
-        "  goto wait\r\n"
-        ")\r\n"
-        f'move /Y "{new_exe}" "{target_exe}" >nul\r\n'
-        f'start "" "{target_exe}"\r\n'
-        'del "%~f0"\r\n'
-    )
-    script_path.write_text(script, encoding="utf-8")
+def write_swap_script(pids: list[int], new_exe: Path, target_exe: Path, script_path: Path) -> Path:
+    """Wait for every pid (PyInstaller onefile = bootloader parent + child) to exit, then swap.
+
+    The move is retried for ~30 s because the exe can stay locked briefly after exit.
+    The new exe is started only after a successful move; otherwise the old one restarts
+    and the failure is written next to the script.
+    """
+    lines = ["@echo off"]
+    for i, pid in enumerate(pids):
+        # each wait is capped (~30 s) so an unrelated long-lived parent can't hang the update
+        lines += [
+            f"set w{i}=0",
+            f":wait{i}",
+            f'tasklist /FI "PID eq {pid}" | find "{pid}" >nul',
+            f"if errorlevel 1 goto waited{i}",
+            f"set /a w{i}+=1",
+            f"if %w{i}% GEQ 30 goto waited{i}",
+            "timeout /t 1 /nobreak >nul",
+            f"goto wait{i}",
+            f":waited{i}",
+        ]
+    lines += [
+        "set tries=0",
+        ":retry",
+        f'move /Y "{new_exe}" "{target_exe}" >nul 2>&1',
+        "if not errorlevel 1 goto moved",
+        "set /a tries+=1",
+        "if %tries% GEQ 30 goto failed",
+        "timeout /t 1 /nobreak >nul",
+        "goto retry",
+        ":failed",
+        f'echo Box Agent update failed: could not replace "{target_exe}" > "%~dp0update-error.txt"',
+        f'start "" "{target_exe}"',
+        "exit /b 1",
+        ":moved",
+        f'start "" "{target_exe}"',
+        '(goto) 2>nul & del "%~f0"',
+    ]
+    script_path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8", newline="")
     return script_path
 
 
@@ -136,7 +161,7 @@ def apply_update(release: Release) -> bool:
     if not verify_sha256(new_exe, sha):
         new_exe.unlink(missing_ok=True)
         raise ValueError("Downloaded update failed its SHA-256 check")
-    script = write_swap_script(os.getpid(), new_exe, Path(sys.executable), stage / "swap.cmd")
+    script = write_swap_script([os.getpid(), os.getppid()], new_exe, Path(sys.executable), stage / "swap.cmd")
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
     subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True)
     return True

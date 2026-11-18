@@ -103,6 +103,7 @@ class Agent:
             {"role": "system", "content": SYSTEM_PROMPT},
             _screen_message(f"Task: {task.strip() or DEFAULT_TASK}", shot),
         ]
+        clicked_in_box = False
         for step in range(1, self.max_steps + 1):
             if self.stop.is_set():
                 return self._stopped()
@@ -117,7 +118,12 @@ class Agent:
             if self.stop.is_set():
                 return self._stopped()
 
-            calls = reply.get("tool_calls") or []
+            # Some providers omit ids; every tool call needs one so its result can be matched.
+            calls = [
+                c if c.get("id") else {**c, "id": f"call_{step}_{i}"}
+                for i, c in enumerate(reply.get("tool_calls") or [])
+            ]
+            reply = {**reply, "tool_calls": calls}
             assistant = {"role": "assistant", "content": reply.get("content") or ""}
             if calls:
                 assistant["tool_calls"] = calls
@@ -131,6 +137,12 @@ class Agent:
 
             try:
                 action = parse_tool_call(reply, shot.width, shot.height)
+                if action.name in ("type", "key") and not clicked_in_box:
+                    # keyboard input goes to whatever has focus; make sure that's inside the box
+                    raise ToolError(
+                        "Click inside the box first so keyboard input goes to the right place.",
+                        action.call_id,
+                    )
             except ToolError as e:
                 self.on_step(StepEvent(step, "error", str(e)))
                 if e.call_id is not None:
@@ -156,6 +168,8 @@ class Agent:
                     desc = self.executor.run(action)
                 except FailsafeTriggered:
                     return self._stopped()
+                if action.name in ("click", "double_click", "drag"):
+                    clicked_in_box = True
                 if not self._wait(self.settle_delay):
                     return self._stopped()
             self.on_step(StepEvent(step, "action", desc))

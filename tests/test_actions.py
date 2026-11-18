@@ -135,6 +135,44 @@ def test_dry_run_reports_image_points():
     assert m.log == []
 
 
+def test_type_crlf_presses_enter_once():
+    e, _, k = ex()
+    e.run(act("type", text="a\r\nb\rc"))
+    assert k.log == [("type", "a"), ("tap", Key.enter), ("type", "b"), ("tap", Key.enter), ("type", "c")]
+
+
+def test_long_type_stops_between_chunks():
+    import threading
+
+    stop = threading.Event()
+    m, k = FakeMouse(), FakeKeyboard()
+    e = Executor(BOX, 1.0, mouse=m, keyboard=k, corners=CORNERS, stop=stop)
+    orig = k.type
+
+    def type_then_stop(s):
+        orig(s)
+        stop.set()
+
+    k.type = type_then_stop
+    with pytest.raises(FailsafeTriggered):
+        e.run(act("type", text="x" * 100))
+    assert k.log == [("type", "x" * 20)]
+
+
+def test_monitor_corners_per_monitor():
+    from box_agent.actions import monitor_corners
+
+    mons = [
+        {"left": -1280, "top": 0, "width": 3200, "height": 1080},  # virtual bbox
+        {"left": 0, "top": 0, "width": 1920, "height": 1080},
+        {"left": -1280, "top": 200, "width": 1280, "height": 720},
+    ]
+    c = monitor_corners(mons)
+    assert (0, 0) in c and (1919, 1079) in c
+    assert (-1280, 200) in c and (-1, 919) in c
+    assert (-1280, 0) not in c  # bbox corner on no screen
+
+
 def test_failsafe_corner():
     e, m, _ = ex()
     object.__setattr__(m, "position", (0, 0))

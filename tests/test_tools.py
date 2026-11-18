@@ -95,6 +95,18 @@ def test_non_finite_wait_rejected():
         parse_tool_call(msg("wait", {"seconds": "nan"}), W, H)
 
 
+@pytest.mark.parametrize("combo", ["a+ctrl", "ctrl+a+b", "enter+shift"])
+def test_non_modifier_before_last_rejected(combo):
+    with pytest.raises(ToolError):
+        parse_tool_call(msg("key", {"combo": combo}), W, H)
+
+
+def test_type_length_capped():
+    with pytest.raises(ToolError):
+        parse_tool_call(msg("type", {"text": "x" * 2001}), W, H)
+    assert parse_tool_call(msg("type", {"text": "x" * 2000}), W, H)
+
+
 def test_unknown_key():
     with pytest.raises(ToolError):
         parse_tool_call(msg("key", {"combo": "ctrl+banana"}), W, H)
