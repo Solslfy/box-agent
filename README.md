@@ -10,7 +10,9 @@ Powered by any vision + tool-calling model on [OpenRouter](https://openrouter.ai
 2. Run it. Windows SmartScreen may warn because the exe isn't code-signed: choose **More info → Run anyway**.
 3. Paste your OpenRouter API key into the settings window. It's stored in Windows Credential Manager, not in a file.
 
-The app lives in the system tray.
+The app lives in the system tray. After its first run it adds itself to the Start Menu, so you can
+open it again by typing **Box Agent** in Windows search. Put the exe somewhere permanent before
+running it (if you move it, run it once from the new place and the shortcut follows).
 
 ## Use
 

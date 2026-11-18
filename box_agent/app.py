@@ -389,8 +389,26 @@ def _setup_logging():
     )
 
 
+def _register_shortcut() -> None:
+    """Packaged exe only: keep a Start Menu shortcut so Windows search finds the app."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    def work():
+        from .shortcut import ensure_shortcut
+
+        try:
+            if ensure_shortcut(Path(sys.executable)):
+                log.info("Start Menu shortcut set to %s", sys.executable)
+        except Exception as e:  # a missing shortcut must never stop the app
+            log.warning("Could not create Start Menu shortcut: %s", e)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def main() -> None:
     _setup_logging()
+    _register_shortcut()
     import keyring
 
     log.info("Box Agent %s starting; keyring backend: %s", __version__, keyring.get_keyring())
