@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from .winpaths import powershell
+
 SHORTCUT_NAME = "Box Agent.lnk"
 # Paths are passed through environment variables so no quoting can break the script.
 _PS_SCRIPT = (
@@ -45,9 +47,11 @@ def ensure_shortcut(
         return False
     lnk_dir.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "BA_LNK": str(lnk), "BA_TARGET": str(target), "BA_DIR": str(target.parent)}
+    ps = powershell()
     run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
+        [str(ps), "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
         env=env,
+        cwd=str(ps.parent),
         check=True,
         timeout=30,
         capture_output=True,

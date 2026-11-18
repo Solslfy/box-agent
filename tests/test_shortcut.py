@@ -27,7 +27,8 @@ def test_creates_shortcut_pointing_at_exe(paths):
     run = FakeRun()
     assert ensure_shortcut(exe, lnk_dir=lnk_dir, marker=marker, run=run)
     cmd, env = run.calls[0]
-    assert cmd[0] == "powershell"
+    # absolute System32 path: a powershell.exe planted next to the app must not run
+    assert cmd[0].lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # paths travel via env vars, never spliced into the script text
     assert str(exe) not in " ".join(cmd)
     assert env["BA_LNK"] == str(lnk_dir / SHORTCUT_NAME)

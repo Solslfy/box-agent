@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from . import winpaths
 from .version import __version__
 
 log = logging.getLogger(__name__)
@@ -163,5 +164,6 @@ def apply_update(release: Release) -> bool:
         raise ValueError("Downloaded update failed its SHA-256 check")
     script = write_swap_script([os.getpid(), os.getppid()], new_exe, Path(sys.executable), stage / "swap.cmd")
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-    subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True)
+    shell = winpaths.cmd()
+    subprocess.Popen([str(shell), "/c", str(script)], cwd=str(stage), creationflags=flags, close_fds=True)
     return True
