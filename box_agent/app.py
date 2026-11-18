@@ -340,6 +340,9 @@ def _setup_logging():
 
 def main() -> None:
     _setup_logging()
+    import keyring
+
+    log.info("Box Agent %s starting; keyring backend: %s", __version__, keyring.get_keyring())
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(make_icon())
