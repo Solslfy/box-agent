@@ -41,9 +41,8 @@ jobs:
           $h = (Get-FileHash dist/BoxAgent.exe -Algorithm SHA256).Hash.ToLower()
           "$h  BoxAgent.exe" | Set-Content -NoNewline -Encoding ascii dist/BoxAgent.exe.sha256
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/BoxAgent.exe
-            dist/BoxAgent.exe.sha256
-          generate_release_notes: true
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$env:GITHUB_REF_NAME" dist/BoxAgent.exe dist/BoxAgent.exe.sha256 --generate-notes --title "$env:GITHUB_REF_NAME"
