@@ -124,6 +124,17 @@ def test_dry_run_touches_nothing():
     assert desc.startswith("[dry run] ")
 
 
+def test_dry_run_reports_image_points():
+    pts = []
+    m, k = FakeMouse(), FakeKeyboard()
+    e = Executor(BOX, 1.0, mouse=m, keyboard=k, dry_run=True, corners=CORNERS, on_point=lambda x, y: pts.append((x, y)))
+    e.run(act("click", x=7, y=8, button="left"))
+    e.run(act("drag", x1=1, y1=2, x2=3, y2=4))
+    e.run(act("type", text="x"))
+    assert pts == [(7, 8), (1, 2), (3, 4)]
+    assert m.log == []
+
+
 def test_failsafe_corner():
     e, m, _ = ex()
     object.__setattr__(m, "position", (0, 0))

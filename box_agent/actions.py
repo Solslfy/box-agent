@@ -47,6 +47,7 @@ class Executor:
         dry_run: bool = False,
         corners: list[tuple[int, int]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        on_point: Callable[[int, int], None] | None = None,
     ):
         if mouse is None:
             from pynput.mouse import Controller as MouseController
@@ -63,6 +64,7 @@ class Executor:
         self.dry_run = dry_run
         self.corners = corners if corners is not None else _default_corners()
         self.sleep = sleep
+        self.on_point = on_point  # dry run: told the image points it would have used
 
     def _check_failsafe(self) -> None:
         mx, my = self.mouse.position
@@ -94,6 +96,12 @@ class Executor:
             raise ValueError(f"Executor cannot run '{n}'")
 
         if self.dry_run:
+            if self.on_point:
+                if n == "drag":
+                    self.on_point(a["x1"], a["y1"])
+                    self.on_point(a["x2"], a["y2"])
+                elif "x" in a:
+                    self.on_point(a["x"], a["y"])
             return "[dry run] " + desc
         self._check_failsafe()
 
